@@ -302,13 +302,53 @@ The CALL will show higher `total_elapsed_time` than the direct INSERT for the sa
 
 For simple DML wrappers (single INSERT, single UPDATE), the SP adds overhead with no benefit. Use direct parameterized SQL instead.
 
-### The Performance Hierarchy
+### Platform Optimizations: WarpSpeed and Inline Stored Procedures
 
-From best to worst for Hybrid Table single-statement DML:
+Snowflake has introduced two platform-level optimizations that significantly reduce latency for Hybrid Table workloads. Both are automatic and require no application code changes.
 
-1. **Direct DML with AUTOCOMMIT=TRUE** (default) — lowest overhead, plan cache works optimally
-2. **Multi-statement transaction** (explicit BEGIN/COMMIT) — slight overhead from transaction management, useful for batching related writes
-3. **Stored procedure** — highest overhead, use only when procedural logic is required
+**WarpSpeed** (Public Preview)
+
+WarpSpeed automatically recognizes repeated query patterns executed outside of stored procedures and optimizes execution through plan reuse and caching at the execution layer. Benefits include:
+
+- Up to 5x latency reduction for repeated OLTP query patterns
+- Up to 5,000 queries per second on a single XS warehouse
+- Latencies as low as 12ms for indexed point lookups
+- No application changes required — the optimization is applied transparently
+
+WarpSpeed is most effective when your workload uses bound variables (the patterns taught in Steps 1-3 of this guide). Literal-heavy queries with high hash cardinality benefit less because there are fewer repeated patterns to optimize.
+
+To check if your account has WarpSpeed enabled, contact your Snowflake account team. Available on AWS and Azure commercial regions.
+
+**Inline Stored Procedures** (Private Preview)
+
+For workloads that must use stored procedures (complex business logic, multi-step workflows), Inline Stored Procedures deliver a major performance improvement. Instead of executing each statement inside the SP as a separate compilation and round-trip, Inline Stored Procedures push the entire procedure body to the execution layer as a single atomic unit.
+
+Benefits include:
+
+- Over 30x improvement compared to traditional SP execution on Hybrid Tables
+- Over 7,000 transactions per minute on a single XS warehouse (TPROC-C benchmark)
+- Eliminates the GS-to-XP round-trip overhead per statement inside the procedure
+- Queries inside the procedure benefit from plan caching (similar to WarpSpeed)
+
+Inline Stored Procedures are a new procedure type specific to Hybrid Tables. To request access, contact your Snowflake account team.
+
+**Which applies to your workload?**
+
+| Your pattern | Optimization |
+|-------------|-------------|
+| Direct DML (INSERT/UPDATE/DELETE without SP wrapper) | WarpSpeed |
+| Stored procedure wrapping DML against Hybrid Tables | Inline Stored Procedures |
+| Both direct DML and SP-wrapped DML | Both (they apply independently) |
+
+### The Performance Hierarchy (Updated)
+
+From best to worst for Hybrid Table DML:
+
+1. **Direct DML with WarpSpeed enabled** — lowest latency, automatic plan reuse at execution layer
+2. **Direct DML with AUTOCOMMIT=TRUE** (without WarpSpeed) — plan cache at compile layer, good baseline
+3. **Inline Stored Procedure** (Private Preview) — SP overhead nearly eliminated, single atomic push to XP
+4. **Multi-statement transaction** (explicit BEGIN/COMMIT) — slight overhead from transaction management
+5. **Traditional Stored Procedure** — highest overhead, full GS-to-XP round-trip per child statement
 
 <!-- ------------------------ -->
 ## Step 5: COPY INTO Behavior on Hybrid Tables
